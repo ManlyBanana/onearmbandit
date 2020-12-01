@@ -6,7 +6,7 @@
 //Register State Arrays
 //bool BRegisterState[8] = {0, 0, 0, 0, 0, 0, 0, 0,}; //Arrays to store state of Registers B, C, D
 //bool CRegisterState[8] = {0, 0, 0, 0, 0, 0, 0, 0,}; 
-//bool DRegisterState[8] = {0, 0, 0, 0, 0, 0, 0, 0,}; //delete if not needed. probably won't need.
+//bool DRegisterState[8] = {0, 0, 0, 0, 0, 0, 0, 0,}; 
 
 //Timing
 unsigned long currentMillis; //Variable for time since program start ~50 days
@@ -22,13 +22,21 @@ unsigned long heartbeatPreviousTime; //big number for last time of heartbeat sta
 const int MPU = 0x68; //mpu addr
 int16_t AccX, AccY, AccZ; //Integers for acceleration. Signed and constant 16bits. 
 //int16_t GyrX, GyrY, GyrZ;  //As above, but not sure if need rotation rates? Take readings, delete if not useful or to free memory.
+int accelState; //store state of dominant accelerometer axis
+
+//MPU Filtering
+int orientation; //current orientation
+int oldOrientation; //store last orientation
+const int orientationInterval = 100; //interval to find old orientation (debouncing)
+int orientationPreviousTime; //last orientation
+const int domMult = 1.2; //multiplier for determining dominant axis
 
 //SREG vars
 byte sRegStatePre = B00000000; //holds state of sReg before heartbeat
 byte sRegState; //sReg state to use after heartbeat
 byte oldSRegState; //last state of sReg. use for scheduler if implemented
 
-//7Seg Char macros
+//7Seg Character macros
 #define SEG_OFF B00000000   //value to send to shift reg is B00000000
 #define SEG_0 B00111111     //64+16+8+4+2+1 B01011111
 #define SEG_1 B00000110     //4+2 B00000110
@@ -56,8 +64,21 @@ byte oldSRegState; //last state of sReg. use for scheduler if implemented
 #define SREG_DATA_HIGH  PORTB = PORTB | B00000001
 #define SREG_DATA_LOW   PORTB = PORTB & B11111110
 
+//Button variables
+bool button1State = 0; //state for buttons and last states (edge detection)
+bool oldButton1State = 0;
+bool button2State = 0;
+bool oldButton2State = 0;
+bool button3State = 0;
+bool oldButton3State = 0;
+const int buttonDebounceInterval = 50; //interval delay for debouncing
+unsigned long lastButtonDebounceTime1; //last time of debounces
+unsigned long lastButtonDebounceTime2;
+unsigned long lastButtonDebounceTime3;
+
 //Game Variables
-int currentCredits = 0;
+int currentCredits = 0; //store current credits
+
 
 //Run at startup
 void setup() {
@@ -70,14 +91,14 @@ void setup() {
   //PORTD = PORTD | B00000000;
 
   //Begin I2C
-  Wire.begin();
-  Wire.beginTransmission(MPU);
+  Wire.begin(); //start i2c
+  Wire.beginTransmission(MPU); //transmit to mpu address
   Wire.write(0x6B);  // PWR_MGMT_1 register
   Wire.write(0);     // set to zero (wakes up the MPU-6050)
   Wire.endTransmission(true); //leave bus open
 
 
-  SREG_LATCH_LOW;
+  SREG_LATCH_LOW; //set latch for sreg low
   
   //Serial
   Serial.begin(9600); //begin Serial port. Disable for final.
@@ -92,11 +113,13 @@ void loop() {
 
   MPUmeasure(); //run MPU reading
 
+  buttonRead();
+
   creditCounter(); //before shift reg so we can do this in one loop
 
   shiftRegisterUpdate(); //run sReg update
 
-  //serialPrint(); //run serialPrint. disable for final
+  serialPrint(); //run serialPrint. disable for final
 }
 
 void heartbeatMain() { //Indicates he live still. now including dp!
@@ -122,7 +145,6 @@ void MPUmeasure() {
   AccX = Wire.read() << 8 | Wire.read(); //AccX high and low bit 0x3b 0x3c. <<8 shifts first bits 8 higher
   AccY = Wire.read() << 8 | Wire.read(); //AccY high and low bit 0x3d 0x3e
   AccZ = Wire.read() << 8 | Wire.read(); //AccZ high and low bit 0x3f 0x40
-
 /*
   Wire.beginTransmission(MPU);
   Wire.write(0x43);
@@ -133,9 +155,63 @@ void MPUmeasure() {
   GyrZ = Wire.read() << 8 | Wire.read();
 */
 
+  if(abs(AccX) > domMult*abs(AccY) && abs(AccX) > domMult*abs(AccZ)) { //is dominant axis X
+    if(AccX > 0) { //X in one dir
+      accelState = 2; //Tilt far
+    }
+    else {
+      accelState = 3; //Tilt close, spin
+    }
+  }
+  if(abs(AccY) > domMult*abs(AccX) && abs(AccY) > domMult*abs(AccZ)) { //is dom axis y?
+    if(AccY > 0) { //y in one dir
+      accelState = 4; //Tilt left, Coin add
+    }
+    else {
+      accelState = 5; //Tilt right, Coin remove
+    }
+  }
+  if(abs(AccZ) > domMult*abs(AccX) && abs(AccZ) > domMult*abs(AccY)) { //is dom axis z?
+    if(AccZ > 0) { //z in one dir
+      accelState = 0; //Bottom down, resting
+    }
+    else {
+      accelState = 1; //Bottom Up
+    }
+  }
+}
+
+void buttonRead() {
+
+
+  if(currentMillis - lastButtonDebounceTime1 >= buttonDebounceInterval) {
+    
+  }
+  if(currentMillis - lastButtonDebounceTime2 >= buttonDebounceInterval) {
+    
+  }
+  if(currentMillis - lastButtonDebounceTime3 >= buttonDebounceInterval) {
+    
+  }
 }
 
 void creditCounter() {
+  orientation = accelState; //update working variable for this section
+  
+  if(currentMillis - orientationPreviousTime >= orientationInterval) { //update old orientation for rising edge detection
+    orientationPreviousTime = currentMillis;
+    oldOrientation = orientation;
+  }
+
+  if(orientation == 4 && oldOrientation == 0) { 
+    currentCredits++;
+    oldOrientation = orientation;
+  }
+
+  if(orientation == 5 && oldOrientation == 0) {
+    currentCredits--;
+    oldOrientation = orientation;
+  }
 
   if(currentCredits > 15) { //credits may not exceed 15
     currentCredits = 15;
@@ -174,15 +250,15 @@ void shiftRegisterUpdate() {
     sRegState = sRegStatePre & ~SEG_DP;
   }
 
-  Serial.println("ShiftStart");
+  //Serial.println("ShiftStart");
   for(int shiftBit=0; shiftBit<8;  shiftBit++) { //repeat 8 times, incrementing.
     if(bitRead(sRegState, 7-shiftBit) == 1) {
       SREG_DATA_HIGH;
-      Serial.println(bitRead(sRegState, 7-shiftBit));
+      //Serial.println(bitRead(sRegState, 7-shiftBit));
     }
     else{
       SREG_DATA_LOW;
-      Serial.println(bitRead(sRegState, 7-shiftBit));
+      //Serial.println(bitRead(sRegState, 7-shiftBit));
     }
     SREG_CLOCK_HIGH; //cycle clock once data stable
     SREG_CLOCK_LOW;
@@ -200,5 +276,6 @@ void serialPrint() { //Disable for final
     //Serial.print(AccY);
     //Serial.print('Z');
     //Serial.println(AccZ);
+    Serial.println(accelState);
 
 }
